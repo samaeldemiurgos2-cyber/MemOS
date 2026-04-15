@@ -27,12 +27,37 @@ Environment variables (set in ~/.claude/settings.json or a .env file):
 """
 
 import argparse
+import logging
 import os
+import sys
+import warnings
+
+# ── Redirect all output to stderr before importing MemOS ──────────────────────
+# MCP stdio transport uses stdout exclusively for JSON-RPC messages.
+# Any non-JSON text on stdout will break the protocol.
+warnings.filterwarnings("ignore")
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+# Force root logger to stderr at WARNING level before MemOS sets up its handlers
+logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
 
 from dotenv import load_dotenv
 
 # Load .env file if present (optional, env vars in settings.json take precedence)
 load_dotenv()
+
+
+def _redirect_handlers_to_stderr():
+    """After all imports, ensure no logging handler writes to stdout."""
+    for name in list(logging.Logger.manager.loggerDict.keys()):
+        lgr = logging.getLogger(name)
+        for handler in lgr.handlers:
+            if isinstance(handler, logging.StreamHandler) and getattr(handler, "stream", None) is sys.stdout:
+                handler.stream = sys.stderr
+    for handler in logging.root.handlers:
+        if isinstance(handler, logging.StreamHandler) and getattr(handler, "stream", None) is sys.stdout:
+            handler.stream = sys.stderr
 
 
 def build_ollama_tree_config():
@@ -147,6 +172,9 @@ if __name__ == "__main__":
 
     from memos.api.mcp_serve import MOSMCPServer
     from memos.mem_os.main import MOS
+
+    # Redirect any stdout log handlers to stderr after all imports
+    _redirect_handlers_to_stderr()
 
     mos_config, cube = build_ollama_tree_config()
     mos = MOS(config=mos_config)
