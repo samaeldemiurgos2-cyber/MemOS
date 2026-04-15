@@ -32,14 +32,16 @@ import os
 import sys
 import warnings
 
-# ── Redirect all output to stderr before importing MemOS ──────────────────────
+# ── Hijack stdout during initialization ───────────────────────────────────────
 # MCP stdio transport uses stdout exclusively for JSON-RPC messages.
-# Any non-JSON text on stdout will break the protocol.
+# MemOS writes log output to stdout which corrupts the protocol.
+# Solution: replace sys.stdout with stderr during startup, restore before FastMCP runs.
+_real_stdout = sys.stdout
+sys.stdout = sys.stderr
+
 warnings.filterwarnings("ignore")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
-# Force root logger to stderr at WARNING level before MemOS sets up its handlers
 logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
 
 from dotenv import load_dotenv
@@ -179,6 +181,9 @@ if __name__ == "__main__":
     mos_config, cube = build_ollama_tree_config()
     mos = MOS(config=mos_config)
     mos.register_mem_cube(cube)
+
+    # Restore real stdout so FastMCP can use it for JSON-RPC
+    sys.stdout = _real_stdout
 
     server = MOSMCPServer(mos_instance=mos)
     server.run(transport=args.transport, host=args.host, port=args.port)
