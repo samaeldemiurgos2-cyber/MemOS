@@ -118,6 +118,7 @@ def build_ollama_tree_config():
                         "auto_create": False,
                         "use_multi_db": False,
                         "embedding_dimension": embed_dim,
+                        "user_name": f"memos{user_id.replace('-', '').replace('_', '')}",
                     },
                 },
                 "embedder": ollama_embedder,
