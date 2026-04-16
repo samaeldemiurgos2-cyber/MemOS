@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 Bulk ingestion script for Halcyon Ridge creative corpus into MemOS.
-Processes PDF, DOCX, MD, TXT files — skips images.
+Processes PDF, DOCX, MD, TXT, HTML files — skips images.
+
+Reads each file as plain text locally, then passes the content directly
+to mos.add(memory_content=...) to bypass tree_text scene extraction,
+which requires a larger LLM than qwen2.5:0.5b.
 
 Usage:
     python D:\MemOS\ingest_halcyon.py
@@ -19,19 +23,61 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-CORPUS_ROOT   = r"D:\Halcyon Ridge"
-OLLAMA_BASE   = os.getenv("OLLAMA_API_BASE",       "http://100.72.225.62:11434")
-CHAT_MODEL    = os.getenv("OLLAMA_CHAT_MODEL",     "qwen2.5:0.5b")
-EMBED_MODEL   = os.getenv("OLLAMA_EMBEDDER_MODEL", "nomic-embed-text:latest")
-EMBED_DIM     = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
-NEO4J_URI     = os.getenv("NEO4J_URI",             "bolt://100.72.225.62:7687")
-NEO4J_USER    = os.getenv("NEO4J_USER",            "neo4j")
-NEO4J_PASS    = os.getenv("NEO4J_PASSWORD",        "EchoZulu11!!")
-NEO4J_DB      = os.getenv("NEO4J_DB_NAME",         "neo4j")
-USER_ID       = os.getenv("MOS_USER_ID",           "claude_user")
+CORPUS_ROOT = r"D:\Halcyon Ridge"
+OLLAMA_BASE = os.getenv("OLLAMA_API_BASE",       "http://100.72.225.62:11434")
+CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",     "qwen2.5:0.5b")
+EMBED_MODEL = os.getenv("OLLAMA_EMBEDDER_MODEL", "nomic-embed-text:latest")
+EMBED_DIM   = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
+NEO4J_URI   = os.getenv("NEO4J_URI",             "bolt://100.72.225.62:7687")
+NEO4J_USER  = os.getenv("NEO4J_USER",            "neo4j")
+NEO4J_PASS  = os.getenv("NEO4J_PASSWORD",        "EchoZulu11!!")
+NEO4J_DB    = os.getenv("NEO4J_DB_NAME",         "neo4j")
+USER_ID     = os.getenv("MOS_USER_ID",           "claude_user")
 
 SUPPORTED_EXT = {".pdf", ".docx", ".md", ".txt", ".html"}
-SKIP_EXT      = {".png", ".jpg", ".jpeg", ".JPG", ".PNG", ".gif", ".webp"}
+
+
+# ── Text extraction ───────────────────────────────────────────────────────────
+def extract_text(filepath: str) -> str:
+    ext = os.path.splitext(filepath)[1].lower()
+
+    if ext == ".pdf":
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(filepath)
+            return "\n\n".join(
+                page.extract_text() or "" for page in reader.pages
+            ).strip()
+        except ImportError:
+            raise RuntimeError("pypdf not installed. Run: pip install pypdf")
+
+    if ext == ".docx":
+        try:
+            import docx
+            doc = docx.Document(filepath)
+            return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        except ImportError:
+            raise RuntimeError("python-docx not installed. Run: pip install python-docx")
+
+    if ext in (".md", ".txt"):
+        with open(filepath, encoding="utf-8", errors="replace") as f:
+            return f.read().strip()
+
+    if ext == ".html":
+        try:
+            from bs4 import BeautifulSoup
+            with open(filepath, encoding="utf-8", errors="replace") as f:
+                soup = BeautifulSoup(f.read(), "html.parser")
+            return soup.get_text(separator="\n").strip()
+        except ImportError:
+            # Fallback: strip tags with regex
+            import re
+            with open(filepath, encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+            return re.sub(r"<[^>]+>", " ", raw).strip()
+
+    return ""
+
 
 # ── Build MOS instance ────────────────────────────────────────────────────────
 def build_mos():
@@ -119,18 +165,34 @@ def build_mos():
     return mos
 
 
-# ── Ingest ────────────────────────────────────────────────────────────────────
+# ── Collect files ─────────────────────────────────────────────────────────────
 def collect_files(root):
     files = []
     for dirpath, _, filenames in os.walk(root):
         for fname in filenames:
-            ext = os.path.splitext(fname)[1]
+            ext = os.path.splitext(fname)[1].lower()
             if ext in SUPPORTED_EXT:
                 files.append(os.path.join(dirpath, fname))
     return sorted(files)
 
 
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    # Check dependencies upfront
+    missing = []
+    try:
+        import pypdf
+    except ImportError:
+        missing.append("pypdf")
+    try:
+        import docx
+    except ImportError:
+        missing.append("python-docx")
+
+    if missing:
+        print(f"Missing dependencies. Run: pip install {' '.join(missing)}")
+        sys.exit(1)
+
     print("Building MOS connection to MemCore...")
     mos = build_mos()
     print("Connected.\n")
@@ -139,13 +201,20 @@ def main():
     total = len(files)
     print(f"Found {total} files to ingest.\n")
 
-    ok, failed = 0, []
+    ok, failed, skipped = 0, [], []
 
     for i, filepath in enumerate(files, 1):
         rel = os.path.relpath(filepath, CORPUS_ROOT)
         print(f"[{i}/{total}] {rel} ... ", end="", flush=True)
         try:
-            mos.add(doc_path=filepath, user_id=USER_ID)
+            text = extract_text(filepath)
+            if not text:
+                print("SKIPPED (empty)")
+                skipped.append(rel)
+                continue
+            # Prefix with filename so the memory knows its source
+            content = f"[Source: {rel}]\n\n{text}"
+            mos.add(memory_content=content, user_id=USER_ID)
             print("OK")
             ok += 1
         except Exception as e:
@@ -154,6 +223,8 @@ def main():
 
     print(f"\n── Done ──────────────────────────────")
     print(f"  Ingested: {ok}/{total}")
+    if skipped:
+        print(f"  Skipped:  {len(skipped)} (empty content)")
     if failed:
         print(f"  Failed:   {len(failed)}")
         for name, err in failed:
