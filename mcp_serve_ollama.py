@@ -27,24 +27,21 @@ Environment variables (set in ~/.claude/settings.json or a .env file):
 """
 
 import argparse
-import io
 import logging
 import os
 import sys
 import warnings
 
 
-class _SilentStdout(io.TextIOWrapper):
+class _SilentStdout:
     """Proxy for sys.stdout that swallows text writes (MemOS logs / print calls)
     while preserving the underlying binary buffer on fd 1 so that FastMCP's
     stdio transport can still write JSON-RPC responses directly to fd 1."""
 
     def __init__(self, real_stdout):
-        # Expose the real binary buffer — FastMCP/mcp uses sys.stdout.buffer
-        object.__setattr__(self, "_real", real_stdout)
-        object.__setattr__(self, "buffer", real_stdout.buffer)
+        self._real = real_stdout
+        self.buffer = real_stdout.buffer  # FastMCP/mcp reads sys.stdout.buffer
 
-    # Text writes go to stderr (suppressed from JSON-RPC stream)
     def write(self, s):
         return sys.stderr.write(s)
 
@@ -55,7 +52,6 @@ class _SilentStdout(io.TextIOWrapper):
         sys.stderr.flush()
 
     def fileno(self):
-        # Return fd 1 so any code using fileno() still targets real stdout
         return self._real.fileno()
 
     @property
@@ -78,6 +74,15 @@ class _SilentStdout(io.TextIOWrapper):
 
     def seekable(self):
         return False
+
+    def isatty(self):
+        return False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
 
 
 # Install proxy immediately — before any imports that might print to stdout.
