@@ -27,16 +27,62 @@ Environment variables (set in ~/.claude/settings.json or a .env file):
 """
 
 import argparse
+import io
 import logging
 import os
 import sys
 import warnings
 
-# ── Permanently redirect stdout to stderr ─────────────────────────────────────
-# MCP stdio transport uses OS fd 1 for JSON-RPC — NOT sys.stdout.
-# MemOS logs go to sys.stdout; keeping it pointed at stderr permanently
-# prevents log output from ever corrupting the JSON-RPC stream.
-sys.stdout = sys.stderr
+
+class _SilentStdout(io.TextIOWrapper):
+    """Proxy for sys.stdout that swallows text writes (MemOS logs / print calls)
+    while preserving the underlying binary buffer on fd 1 so that FastMCP's
+    stdio transport can still write JSON-RPC responses directly to fd 1."""
+
+    def __init__(self, real_stdout):
+        # Expose the real binary buffer — FastMCP/mcp uses sys.stdout.buffer
+        object.__setattr__(self, "_real", real_stdout)
+        object.__setattr__(self, "buffer", real_stdout.buffer)
+
+    # Text writes go to stderr (suppressed from JSON-RPC stream)
+    def write(self, s):
+        return sys.stderr.write(s)
+
+    def writelines(self, lines):
+        sys.stderr.writelines(lines)
+
+    def flush(self):
+        sys.stderr.flush()
+
+    def fileno(self):
+        # Return fd 1 so any code using fileno() still targets real stdout
+        return self._real.fileno()
+
+    @property
+    def encoding(self):
+        return self._real.encoding
+
+    @property
+    def errors(self):
+        return self._real.errors
+
+    @property
+    def closed(self):
+        return self._real.closed
+
+    def readable(self):
+        return False
+
+    def writable(self):
+        return True
+
+    def seekable(self):
+        return False
+
+
+# Install proxy immediately — before any imports that might print to stdout.
+# Text writes (print/logging) → stderr; FastMCP's .buffer writes → fd 1.
+sys.stdout = _SilentStdout(sys.stdout)
 
 warnings.filterwarnings("ignore")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
