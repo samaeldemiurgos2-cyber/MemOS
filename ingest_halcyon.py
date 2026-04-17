@@ -23,7 +23,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-CORPUS_ROOT = r"D:\Halcyon Ridge"
+CORPUS_ROOT = os.getenv("CORPUS_ROOT",           r"D:\Halcyon Ridge")
 OLLAMA_BASE = os.getenv("OLLAMA_API_BASE",       "http://100.72.225.62:11434")
 CHAT_MODEL  = os.getenv("OLLAMA_CHAT_MODEL",     "qwen2.5:0.5b")
 EMBED_MODEL = os.getenv("OLLAMA_EMBEDDER_MODEL", "nomic-embed-text:latest")
