@@ -1,0 +1,36 @@
+[Unit]
+Description=MemOS MCP Server (SSE)
+After=network.target
+
+[Service]
+Type=simple
+# Change User to whatever account owns the MemOS install on MemCore
+User=user
+WorkingDirectory=/home/user/MemOS
+
+# Adjust this path if Python lives elsewhere (check with: which python3)
+ExecStart=/usr/bin/python3 /home/user/MemOS/mcp_serve_ollama.py --transport sse --host 0.0.0.0 --port 8000
+
+Restart=on-failure
+RestartSec=5
+
+# ── Environment ───────────────────────────────────────────────────────────────
+Environment="OLLAMA_API_BASE=http://localhost:11434"
+Environment="OLLAMA_CHAT_MODEL=qwen2.5:0.5b"
+Environment="OLLAMA_EMBEDDER_MODEL=nomic-embed-text:latest"
+Environment="EMBEDDING_DIMENSION=1024"
+Environment="NEO4J_URI=bolt://localhost:7687"
+Environment="NEO4J_USER=neo4j"
+Environment="NEO4J_PASSWORD=EchoZulu11!!"
+Environment="NEO4J_DB_NAME=neo4j"
+Environment="MOS_USER_ID=claude_user"
+Environment="MOS_CHAT_TEMPERATURE=0.7"
+Environment="MOS_MAX_TOKENS=2048"
+Environment="TRANSFORMERS_VERBOSITY=error"
+Environment="TOKENIZERS_PARALLELISM=false"
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
